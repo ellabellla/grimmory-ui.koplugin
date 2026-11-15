@@ -49,8 +49,10 @@ device and sends nothing.
   it is going.
 - **Recently viewed.** Shelf, Search and Series can sort by what you looked at last. This is only
   remembered on the device.
-- **Works behind a reverse proxy.** Add any number of extra headers (an API key for your proxy,
-  for example), sent with every request.
+- **Several users.** Each user has their own server address, headers, sign-in and library on the
+  device, so one e-reader can serve a family or several Grimmory servers. Switch from the menu.
+- **Works behind a reverse proxy.** Add any number of extra headers per user (an API key for your
+  proxy, for example), sent with every request.
 - **Keeps the device tidy.** Finished books can be removed automatically after a number of days.
 - **15 languages.** English, German, French, Spanish, Italian, Portuguese, Polish, Romanian, Dutch,
   Greek, Simplified Chinese, Japanese, Hindi, Bengali and Indonesian. The plugin follows
@@ -84,10 +86,11 @@ first start.
 
 Open the menu at the top left, then **Settings**:
 
-- **Server:** address (for example `https://grimmory.example.com`), user and password.
-- **Extra headers:** sent with every request, for example a key for a reverse proxy in front of
-  Grimmory.
-- **Test** signs in and fetches the book list, so you see right away whether everything works.
+- **Users:** tap a user or **Add user**. Each user has a server address (for example
+  `https://grimmory.example.com`), extra headers, user name and password. Extra headers are sent
+  with every request to that user's server, for example a key for a reverse proxy in front of
+  Grimmory. **Test** signs in and fetches the book list, so you see right away whether everything
+  works.
 - **Sync:** automatically on open when the last sync is older than 30 minutes and Wi-Fi is on,
   report reading status to Grimmory, preload covers.
 - **Formats:** only books in the formats switched on here are synced, EPUB and MOBI by default.
@@ -114,6 +117,26 @@ question: mark the book as read, read the next volume of the series, go back to 
 stay in the book. **More options from KOReader** shows KOReader's question. If you chose another
 end-of-book action in KOReader, that one stays.
 
+## Users
+
+The card at the top of the menu shows who is signed in. **Switch** lists all users; one tap
+switches, and the plugin opens Home with that user's library while the sync runs.
+
+- Nothing is shared between users: each has their own address, headers, sign-in and library on the
+  device, so every user can use a different Grimmory server.
+- **Add user** takes the address and headers of the signed-in user as a template, so a second
+  account on the same server only needs a user name and password. After that, both are
+  independent.
+- **Remember password** (on by default) lets you switch with one tap. Switched off, the password
+  and sign-in stay in memory only and the plugin asks again after KOReader restarts.
+- Downloaded books belong to the server: two users on the same server share them. Reading
+  position is KOReader's and kept per file, not per user.
+- Removing a user deletes their sign-in, headers and library from the device. Downloaded books
+  stay.
+- Updating from 1.2 or earlier turns the existing access into the first user, with its library.
+
+With more than one user, the greeting on Home names who is signed in.
+
 ## Sync in the background
 
 The sync runs in a separate process, so the plugin stays usable. The header shows "Syncing …",
@@ -128,7 +151,8 @@ nothing runs: there is no background service outside KOReader.
 - Password, tokens and header values are stored only in `koreader/settings/grimmory-ui.lua` on the
   device and never written to a log. They are not encrypted there, so give the e-reader its own
   account with only the permissions above, and revoke that account and any proxy key if the
-  device gets lost.
+  device gets lost. A user with **Remember password** switched off leaves no password or token in
+  that file.
 - The plugin does not follow redirects, so headers and tokens never reach another host. Use an
   `https://` address: with `http://`, password and token travel in plain text.
 
