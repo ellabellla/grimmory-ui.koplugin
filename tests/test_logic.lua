@@ -194,4 +194,23 @@ for _, choice in ipairs({ "rate", "never" }) do
     assert(s.done and not rating.due(s, 1e10, true))
 end
 
+-- Benutzer: Der alte Zugang wird der erste, ein neuer übernimmt Adresse und Header als Kopie
+local users = require("grimmoryui/users")
+assert(users.fromOld{} == nil and users.fromOld{ server = "" } == nil)
+local first = users.fromOld{ server = "https://a.example.com", username = "anna", password = "pw",
+    headers = { { name = "X-Key", value = "1" } }, tokens = { access = "t" } }
+assert(first.id == 1 and first.remember and first.password == "pw" and first.tokens.access == "t")
+local accounts = { first }
+local second = users.new(accounts, first)
+assert(second.id == 2 and second.server == first.server and second.username == "" and second.remember)
+second.headers[1].value = "2"
+assert(first.headers[1].value == "1")
+assert(users.new({}, nil).id == 1 and users.new({}, nil).server == "")
+table.insert(accounts, second)
+assert(users.find(accounts, 2) == second and select(2, users.find(accounts, 2)) == 2 and users.find(accounts, 3) == nil)
+assert(users.host("https://grimmory.example.com:8443/app") == "grimmory.example.com" and users.host(nil) == "")
+assert(users.label{ name = "Anna", username = "anna" } == "Anna" and users.label{ username = "ben" } == "ben")
+assert(users.label{} == "Neuer Benutzer")
+assert(users.initial{ username = "ölf" } == "ö" and users.initial{ name = "anna" } == "A")
+
 print("ok")

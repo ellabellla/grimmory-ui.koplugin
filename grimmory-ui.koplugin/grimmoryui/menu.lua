@@ -11,6 +11,7 @@ local InputContainer = require("ui/widget/container/inputcontainer")
 local NetworkMgr = require("ui/network/manager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local lib = require("grimmoryui/library")
+local UserList = require("grimmoryui/userlist")
 local UI = require("grimmoryui/ui")
 local _ = require("grimmoryui/i18n")
 local N_, T = _.ngettext, _.T
@@ -52,31 +53,35 @@ function Menu:build()
             kb = kb + (tonumber(b.fileSizeKb) or 0)
         end
     end
-    local host = (p:setting("server") or ""):gsub("^https?://", "")
     local function books(n) return T(N_("%1 Buch", "%1 Bücher", n), n) end
     local ago = p:syncedAgo()
-    local top = HorizontalGroup:new{ align = "top",
-        VerticalGroup:new{ align = "left",
-            UI.text("Grimmory", 44, { bold = true, serif = true }), UI.vspan(10),
-            UI.text(p:setting("username") ~= "" and p:setting("username") or _("nicht angemeldet"), 26,
-                { bold = true, max_width = w - UI.px(200) }),
-            UI.text(host ~= "" and host or _("kein Server eingetragen"), 22,
-                { color = UI.GRAY, max_width = w - UI.px(200) }) },
-    }
-    local close = UI.tap(UI.CenterContainer:new{ dimen = Geom:new{ w = UI.px(112), h = UI.px(112) },
+    local close = UI.tap(UI.CenterContainer:new{ dimen = Geom:new{ w = UI.px(112), h = UI.px(88) },
         UI.icon("close", 44) }, function() p:closeMenu() end)
+    -- Wer angemeldet ist, als Karte. Ein Tippen öffnet die Liste der Benutzer.
+    local u = p:user()
+    local card_w = w - UI.px(48) - UI.px(40) - 2 * UI.px(3) - 2 * UI.px(20)
+    local switch = HorizontalGroup:new{ align = "center",
+        UI.text(_("Wechseln"), 24, { bold = true }), UI.hspan(6), UI.icon("chevron.right", 32) }
+    local who = u and UserList.entry(p, u, 72, true, false, card_w - switch:getSize().w - UI.px(24))
+        or UI.text(_("nicht angemeldet"), 26, { bold = true })
+    local card = UI.tap(FrameContainer:new{ bordersize = UI.px(3), radius = UI.px(16), padding = 0,
+        padding_left = UI.px(20), padding_right = UI.px(20),
+        UI.LeftContainer:new{ dimen = Geom:new{ w = card_w, h = UI.px(114) }, UI.spread(who, switch, card_w) } },
+        function() p:showUsers() end)
     local items = VerticalGroup:new{
         align = "left",
         FrameContainer:new{ bordersize = 0, padding = 0, padding_left = UI.px(48), padding_top = UI.px(28),
-            padding_bottom = UI.px(20),
-            UI.spread(top, close, w - UI.px(48) - UI.px(8)) },
+            padding_bottom = UI.px(28),
+            VerticalGroup:new{ align = "left",
+                UI.spread(UI.text("Grimmory", 44, { bold = true, serif = true }), close, w - UI.px(48) - UI.px(8)),
+                UI.vspan(16), card } },
         UI.line(w, UI.px(2)),
         self:item("cre.render.reload", _("Jetzt abgleichen"),
             (ago and T(_("zuletzt %1"), ago) or _("noch nicht abgeglichen")) .. " · " .. books(#p.data.books),
             function() p:closeMenu(); p:sync() end),
         self:item("book.opened", UI.ON_DEVICE, books(on_device) .. " · " .. lib.formatSize(kb),
             function() p:showOnDevice() end),
-        self:item("appbar.settings", _("Einstellungen"), _("Server, Abgleich, Speicher"),
+        self:item("appbar.settings", _("Einstellungen"), _("Server, Benutzer, Abgleich, Speicher"),
             function() p:showSettings() end),
         self:item("appbar.textsize", _("Sprache"), p:languageLabel(), function() p:showLanguage() end),
         self:item("info", _("Über Grimmory"), T(_("Plugin %1 · Updates"), p.version or "?"),

@@ -19,6 +19,7 @@ local OverlapGroup = require("ui/widget/overlapgroup")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local lib = require("grimmoryui/library")
+local users = require("grimmoryui/users")
 local UI = require("grimmoryui/ui")
 local _ = require("grimmoryui/i18n")
 local N_, T = _.ngettext, _.T
@@ -429,14 +430,17 @@ end
 function App:startSubtitle()
     local status = self.plugin:syncStatus()
     if status then return status end
-    local host = self.plugin:setting("server"):match("^%a+://([^/:]+)")
+    local host = users.host(self.plugin:setting("server"))
     local ago = self.plugin:syncedAgo()
     local synced = ago and T(_("letzter Abgleich %1"), ago) or _("noch nicht abgeglichen")
-    return host and (host .. " · " .. synced) or synced
+    return host ~= "" and (host .. " · " .. synced) or synced
 end
 
 function App:screenStart(h)
-    local head = { title = greeting(), subtitle = self:startSubtitle(), on_menu = function() self.plugin:showMenu() end }
+    -- Mit mehreren Benutzern nennt der Gruß, wer angemeldet ist.
+    local title, u = greeting(), self.plugin:user()
+    if u and #self.plugin:users() > 1 then title = title .. ", " .. users.label(u) end
+    local head = { title = title, subtitle = self:startSubtitle(), on_menu = function() self.plugin:showMenu() end }
     local data = self:data()
     if #data.books == 0 then return head, self:emptyHint() end
     local parts = { align = "left" }

@@ -1,9 +1,13 @@
 --[[--
-Einstellungen auf einer Seite: Server mit Extra-Headern und Verbindungstest, Abgleich, Bücher,
-Anzeige. Passt nicht alles auf den Bildschirm, wird geblättert.
+Einstellungen auf einer Seite: Benutzer, Abgleich, Formate, Bücher, Anzeige. Passt nicht alles auf
+den Bildschirm, wird geblättert.
+
+Mit `user` dieselbe Seite für einen Benutzer: Adresse und Extra-Header, Anmeldung mit
+Verbindungstest, Wechseln und Entfernen.
 ]]
 
 local ButtonDialog = require("ui/widget/buttondialog")
+local ConfirmBox = require("ui/widget/confirmbox")
 local Device = require("device")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
@@ -17,6 +21,8 @@ local NetworkMgr = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local api = require("grimmoryui/api")
+local users = require("grimmoryui/users")
+local UserList = require("grimmoryui/userlist")
 local UI = require("grimmoryui/ui")
 local _ = require("grimmoryui/i18n")
 local N_, T = _.ngettext, _.T
@@ -25,9 +31,10 @@ local Settings = InputContainer:extend{
     name = "grimmory_settings",
     plugin = nil,
     covers_fullscreen = true,
+    user = nil, -- Seite dieses Benutzers statt der Einstellungen
+    parent = nil, -- Einstellungen darunter, werden beim Schließen neu gezeichnet
+    created = false, -- gerade angelegt: ohne Benutzername beim Schließen wieder weg
 }
-
-local ROW = 88
 
 function Settings:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = UI.width(), h = UI.height() }
@@ -38,22 +45,13 @@ function Settings:init()
         self.key_events.PrevPage = { { Device.input.group.PgBack } }
     end
     self.page = 1
-    self.formats_at_open = table.concat(self.plugin:setting("formats"), ",")
+    if not self.user then self.formats_at_open = table.concat(self.plugin:setting("formats"), ",") end
     self:refresh()
 end
 
 local function innerWidth() return UI.width() - 2 * UI.px(48) end
 
---- Zeile mit fester Höhe: links Beschriftung (und Zusatz), rechts Wert.
-local function row(left, right, callback)
-    local box = VerticalGroup:new{
-        FrameContainer:new{ bordersize = 0, padding = 0, padding_left = UI.px(48), padding_right = UI.px(48),
-            UI.LeftContainer:new{ dimen = Geom:new{ w = innerWidth(), h = UI.px(ROW) - 1 },
-                UI.spread(left, right, innerWidth()) } },
-        UI.line(UI.width(), 1, UI.LINE),
-    }
-    return callback and UI.tap(box, callback) or box
-end
+local row = UI.row
 
 local function label(text, sub, w)
     local items = { align = "left", UI.text(text, 26, { bold = true, max_width = w }) }
@@ -77,13 +75,13 @@ local function switch(on)
         UI.text(on and _("An") or _("Aus"), 24, { bold = true, color = on and UI.BLACK or UI.GRAY }), UI.hspan(20), track }
 end
 
-function Settings:edit(title, key, opts)
+--- Eingabedialog für einen Wert, `save` bekommt die Eingabe ohne Leerzeichen am Rand.
+function Settings:edit(title, input, save, opts)
     opts = opts or {}
-    local p = self.plugin
     local dialog
     dialog = InputDialog:new{
         title = title,
-        input = p:setting(key),
+        input = input,
         input_hint = opts.hint,
         text_type = opts.password and "password" or nil,
         buttons = { {
@@ -91,7 +89,7 @@ function Settings:edit(title, key, opts)
             { text = _("Speichern"), is_enter_default = true, callback = function()
                 local value = dialog:getInputText():gsub("^%s+", ""):gsub("%s+$", "")
                 UIManager:close(dialog)
-                p:saveSetting(key, value)
+                save(value)
                 self:refresh()
             end },
         } },
@@ -100,9 +98,20 @@ function Settings:edit(title, key, opts)
     dialog:onShowKeyboard()
 end
 
+function Settings:editSetting(title, key, opts)
+    self:edit(title, self.plugin:setting(key), function(value) self.plugin:saveSetting(key, value) end, opts)
+end
+
+function Settings:editUser(title, key, opts)
+    local p, u = self.plugin, self.user
+    local input = key == "password" and p:secret(u).password or u[key]
+    self:edit(title, input, function(value) p:saveUser(u, { [key] = value }) end, opts)
+end
+
+--- Extra-Header des Benutzers: ändern, entfernen oder mit `index` hinter dem letzten neu anlegen.
 function Settings:editHeader(index)
-    local p = self.plugin
-    local headers = p:setting("headers")
+    local p, u = self.plugin, self.user
+    local headers = u.headers or {}
     local h = headers[index] or {}
     local dialog
     local buttons = { { text = _("Abbrechen"), id = "close", callback = function() UIManager:close(dialog) end } }
@@ -110,7 +119,7 @@ function Settings:editHeader(index)
         table.insert(buttons, 1, { text = _("Entfernen"), callback = function()
             UIManager:close(dialog)
             table.remove(headers, index)
-            p:saveSetting("headers", headers)
+            p:saveUser(u, { headers = headers })
             self:refresh()
         end })
     end
@@ -120,12 +129,13 @@ function Settings:editHeader(index)
         local name = (fields[1] or ""):gsub("%s", "")
         if name ~= "" then
             headers[index] = { name = name, value = fields[2] or "" }
-            p:saveSetting("headers", headers)
+            p:saveUser(u, { headers = headers })
         end
         self:refresh()
     end })
     dialog = MultiInputDialog:new{
         title = _("Extra-Header"),
+        description = T(_("gilt nur für %1 und geht bei jeder Anfrage an %2 mit"), users.label(u), users.host(u.server)),
         fields = {
             { description = _("Name"), text = h.name or "", hint = "X-Api-Key" },
             { description = _("Wert"), text = h.value or "", text_type = "password" },
@@ -137,8 +147,8 @@ function Settings:editHeader(index)
 end
 
 function Settings:testConnection()
-    local p = self.plugin
-    if not p:isConfigured() then
+    local p, u = self.plugin, self.user
+    if (u.server or "") == "" or (u.username or "") == "" then
         self.test_result = _("Erst Adresse und Benutzer eintragen")
         self:refresh()
         return
@@ -148,8 +158,7 @@ function Settings:testConnection()
         local info = InfoMessage:new{ text = _("Verbindung zu Grimmory wird getestet …") }
         UIManager:show(info)
         UIManager:forceRePaint()
-        p._client = nil
-        local client, err = p:client()
+        local client, err = p:clientFor(u)
         local ok
         if client then
             client.tokens = {}
@@ -162,7 +171,9 @@ function Settings:testConnection()
             local list, list_err = client:getJSON("/api/v1/app/books?page=0&size=1")
             self.test_ok = me ~= nil and list ~= nil
             if self.test_ok then
-                self.test_result = T(_("Angemeldet als %1"), me.username or me.name or p:setting("username"))
+                -- Der Name aus Grimmory steht danach in der Liste und im Gruß.
+                p:saveUser(u, { name = (me.name or "") ~= "" and me.name or u.name })
+                self.test_result = T(_("Angemeldet als %1"), users.label(u))
             else
                 self.test_result = T(_("Anmeldung klappt, Abruf nicht: %1"), api.describe(me_err or list_err))
             end
@@ -205,35 +216,27 @@ function Settings:rows()
             UI.text(shown, 24, { color = UI.DARK, max_width = innerWidth() - w - UI.px(60) }), UI.hspan(12),
             chevron() }, callback))
     end
-    local function show(v, empty) return (v and v ~= "") and v or empty end
     local function section(text)
         local widget = UI.section(text)
         widget.keep_with_next = true
         add(widget)
     end
 
-    local missing = _("nicht eingetragen")
-    section(_("SERVER"))
-    value(_("Adresse"), show(p:setting("server"), missing), function()
-        self:edit(_("Adresse des Grimmory-Servers"), "server", { hint = "https://grimmory.example.com" })
-    end)
-    value(_("Benutzer"), show(p:setting("username"), missing), function()
-        self:edit(_("Benutzer"), "username")
-    end)
-    value(_("Passwort"), p:setting("password") ~= "" and "••••••••" or missing, function()
-        self:edit(_("Passwort"), "password", { password = true })
-    end)
-    local headers = p:setting("headers")
-    for i, h in ipairs(headers) do
-        value(i == 1 and _("Extra-Header") or "", (h.name or "") .. ": ••••", function() self:editHeader(i) end,
-            i == 1 and _("gehen bei jeder Anfrage mit") or nil)
+    if self.user then
+        self:userRows(add, value, section, w)
+        return list
     end
-    value(#headers == 0 and _("Extra-Header") or "", _("Header hinzufügen"), function() self:editHeader(#headers + 1) end,
-        #headers == 0 and _("gehen bei jeder Anfrage mit") or nil)
-    local result = self.test_result and UI.text(self.test_result, 22, { bold = self.test_ok,
-        color = self.test_ok and UI.BLACK or UI.DARK, max_width = innerWidth() - UI.px(400) })
-    add(row(HorizontalGroup:new{ align = "center", label(_("Verbindung"), nil, UI.px(200)), UI.hspan(20),
-        UI.button(_("Testen"), function() self:testConnection() end, { height = UI.px(64) }) }, result or nil))
+
+    section(_("BENUTZER"))
+    local signed_in = _("Angemeldet")
+    for _, u in ipairs(p:users()) do
+        local active = p:isActive(u)
+        local right = HorizontalGroup:new{ align = "center",
+            active and UI.pill(signed_in, { height = 44 }) or UI.hspan(0), UI.hspan(16), chevron() }
+        add(row(UserList.entry(p, u, 64, active, true, innerWidth() - right:getSize().w - UI.px(20)), right,
+            function() p:showUserEditor(u, self) end, 112))
+    end
+    add(row(UserList.addEntry(p, 64), nil, function() p:showUserEditor(p:addUser(), self, true) end, 112))
 
     section(_("ABGLEICH"))
     local minutes, days = p:setting("sync_minutes"), p:setting("remove_read_days")
@@ -262,7 +265,7 @@ function Settings:rows()
     end
 
     section(_("BÜCHER"))
-    value(_("Speicherort"), p:setting("download_dir"), function() self:edit(_("Speicherort für Downloads"), "download_dir") end)
+    value(_("Speicherort"), p:setting("download_dir"), function() self:editSetting(_("Speicherort für Downloads"), "download_dir") end)
     toggle(_("Gelesene Bücher entfernen"), T(N_("%1 Tag nach dem Lesen vom Gerät löschen",
         "%1 Tage nach dem Lesen vom Gerät löschen", days), days), "remove_read")
     value(_("Belegter Speicher"), _("Suche öffnen"), function() self:close(); p:showOnDevice() end,
@@ -276,9 +279,87 @@ function Settings:rows()
 
     section(_("UPDATES"))
     value(_("GitHub-Repo"), p:setting("update_repo"), function()
-        self:edit(_("GitHub-Repo für das Selbst-Update"), "update_repo", { hint = _("besitzer/repo") })
+        self:editSetting(_("GitHub-Repo für das Selbst-Update"), "update_repo", { hint = _("besitzer/repo") })
     end, _("für Updates ohne AppStore"))
     return list
+end
+
+--- Seite eines Benutzers: eigener Server mit Headern, Anmeldung, Wechseln und Entfernen.
+function Settings:userRows(add, value, section, w)
+    local p, u = self.plugin, self.user
+    local active = p:isActive(u)
+    local missing = _("nicht eingetragen")
+    local function show(v) return (v and v ~= "") and v or missing end
+    add(FrameContainer:new{ bordersize = 0, padding = 0, padding_left = UI.px(48), padding_top = UI.px(28),
+        padding_bottom = UI.px(28),
+        HorizontalGroup:new{ align = "center", UI.avatar(users.initial(u), 96, active), UI.hspan(28),
+            VerticalGroup:new{ align = "left",
+                UI.text(users.label(u), 44, { bold = true, serif = true, max_width = innerWidth() - UI.px(130) }),
+                (u.name or "") ~= "" and UI.text(_("Name aus Grimmory"), 22, { color = UI.GRAY }) or UI.vspan(0) } } })
+
+    section(_("SERVER"))
+    value(_("Adresse"), show(u.server), function()
+        self:editUser(_("Adresse des Grimmory-Servers"), "server", { hint = "https://grimmory.example.com" })
+    end)
+    local headers = u.headers or {}
+    for i, h in ipairs(headers) do
+        value(i == 1 and _("Extra-Header") or "", (h.name or "") .. ": ••••", function() self:editHeader(i) end,
+            i == 1 and _("gehen bei jeder Anfrage mit") or nil)
+    end
+    value(#headers == 0 and _("Extra-Header") or "", _("Header hinzufügen"), function() self:editHeader(#headers + 1) end,
+        #headers == 0 and _("gehen bei jeder Anfrage mit") or nil)
+
+    section(_("ANMELDUNG"))
+    value(_("Benutzername"), show(u.username), function() self:editUser(_("Benutzername"), "username") end)
+    value(_("Passwort"), p:hasPassword(u) and "••••••••" or missing, function()
+        self:editUser(_("Passwort"), "password", { password = true })
+    end)
+    add(row(label(_("Passwort merken"), _("Wechsel ohne Eingabe, liegt unverschlüsselt auf dem Gerät"),
+            innerWidth() - UI.px(200)),
+        switch(u.remember ~= false), function()
+            p:setRemember(u, u.remember == false)
+            self:refresh()
+        end))
+    local result = self.test_result and UI.text(self.test_result, 22, { bold = self.test_ok,
+        color = self.test_ok and UI.BLACK or UI.DARK, max_width = innerWidth() - UI.px(400) })
+    add(row(HorizontalGroup:new{ align = "center", label(_("Verbindung"), nil, UI.px(200)), UI.hspan(20),
+        UI.button(_("Testen"), function() self:testConnection() end, { height = UI.px(64) }) }, result or nil))
+
+    local half = math.floor((innerWidth() - UI.px(24)) / 2)
+    local buttons = HorizontalGroup:new{ align = "center" }
+    if not active then
+        table.insert(buttons, UI.button(T(_("Zu %1 wechseln"), users.label(u)), function() self:switchTo() end,
+            { primary = true, width = half, height = UI.px(88) }))
+        table.insert(buttons, UI.hspan(24))
+    end
+    table.insert(buttons, UI.button(_("Benutzer entfernen"), function() self:confirmRemove() end,
+        { width = half, height = UI.px(88) }))
+    add(UI.padded(VerticalGroup:new{ align = "left", buttons, UI.vspan(16),
+        UI.textbox(T(_("Entfernen löscht Zugang, Header und die Bibliothek von %1 auf dem Gerät. Heruntergeladene Bücher bleiben."),
+            users.label(u)), 22, innerWidth(), nil, { color = UI.GRAY }) }, 32, 32))
+end
+
+--- Zu diesem Benutzer wechseln. Die Einstellungen schließen, der Wechsel öffnet Start.
+function Settings:switchTo()
+    UIManager:close(self, "flashui")
+    if self.parent then self.parent:close() end
+    self.plugin:switchUser(self.user)
+end
+
+function Settings:confirmRemove()
+    local p, u = self.plugin, self.user
+    UIManager:show(ConfirmBox:new{
+        text = T(_("%1 vom Gerät entfernen?"), users.label(u)),
+        ok_text = _("Entfernen"),
+        ok_callback = function()
+            UIManager:close(self, "flashui")
+            -- Geht der angemeldete, öffnet der nächste Benutzer Start; die Einstellungen stünden davor.
+            if self.parent then
+                if p:isActive(u) then self.parent:close() else UIManager:nextTick(function() self.parent:refresh() end) end
+            end
+            p:removeUser(u)
+        end,
+    })
 end
 
 function Settings:refresh()
@@ -332,10 +413,24 @@ function Settings:onNextPage() self:turn(1); return true end
 function Settings:onPrevPage() self:turn(-1); return true end
 
 function Settings:close()
+    local p = self.plugin
     UIManager:close(self, "flashui")
-    if self.plugin.app then self.plugin.app:render() end
+    if self.user then
+        local named = (self.user.username or "") ~= ""
+        if self.created and not named then p:removeUser(self.user) end
+        -- Der erste Benutzer überhaupt meldet sich gleich an.
+        if named and not p:user() then
+            if self.parent then self.parent:close() end
+            p:switchUser(self.user)
+            return
+        end
+        if self.parent then self.parent:refresh() end
+        if p.app then p.app:render() end
+        return
+    end
+    if p.app then p.app:render() end
     -- Andere Formate wirken erst mit einem neuen Abgleich.
-    if table.concat(self.plugin:setting("formats"), ",") ~= self.formats_at_open then self.plugin:sync() end
+    if table.concat(p:setting("formats"), ",") ~= self.formats_at_open then p:sync() end
 end
 
 function Settings:onClose()

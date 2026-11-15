@@ -175,7 +175,8 @@ end
 --- Knopf mit Text. o: primary (schwarz), width, height, size.
 function UI.button(label, callback, o)
     o = o or {}
-    local text = UI.text(label, o.size or 26, { bold = true, color = o.primary and UI.WHITE or UI.BLACK })
+    local text = UI.text(label, o.size or 26, { bold = true, color = o.primary and UI.WHITE or UI.BLACK,
+        max_width = o.width and o.width - UI.px(24) })
     local w = o.width or (text:getSize().w + UI.px(48))
     local h = o.height or UI.px(72)
     local box = UI.box(text, w, h, {
@@ -459,6 +460,24 @@ function UI.section(label, right)
             CenterContainer:new{ dimen = Geom:new{ w = W - 2 * UI.px(48), h = h }, content } },
         UI.line(W, 1, UI.LINE),
     }
+end
+
+--- Zeile über die volle Breite mit fester Höhe `h` (Vorgabe 88): links Beschriftung, rechts Wert,
+--- Linie darunter.
+function UI.row(left, right, callback, h)
+    local w = UI.width() - 2 * UI.px(48)
+    local box = VerticalGroup:new{
+        FrameContainer:new{ bordersize = 0, padding = 0, padding_left = UI.px(48), padding_right = UI.px(48),
+            LeftContainer:new{ dimen = Geom:new{ w = w, h = UI.px(h or 88) - 1 }, UI.spread(left, right, w) } },
+        UI.line(UI.width(), 1, UI.LINE),
+    }
+    return callback and UI.tap(box, callback) or box
+end
+
+--- Kreis mit dem Anfangsbuchstaben eines Benutzers, gefüllt für den angemeldeten.
+function UI.avatar(letter, size, active)
+    return UI.box(UI.text(letter, math.floor(size / 2), { bold = true, serif = true, color = active and UI.WHITE or UI.BLACK }),
+        UI.px(size), UI.px(size), { border = 3, radius = size / 2, background = active and UI.BLACK or UI.WHITE })
 end
 
 --- Überschrift eines Abschnitts in Serifenschrift.

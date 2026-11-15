@@ -28,6 +28,7 @@ local util = require("util")
 local api = require("grimmoryui/api")
 local library = require("grimmoryui/library")
 local rating = require("grimmoryui/rating")
+local users = require("grimmoryui/users")
 local _ = require("grimmoryui/i18n")
 local N_, T = _.ngettext, _.T
 
@@ -53,7 +54,12 @@ local DEFAULTS = {
 
 -- Zustand über alle Dateimanager-Instanzen hinweg. KOReader legt das Plugin für jeden Dateimanager
 -- und jeden Reader neu an, das Modul selbst bleibt aber geladen.
-local session = { started = false, reopen = false, last_book = nil, just_finished = false }
+-- secrets: Passwort und Tokens der Benutzer ohne „Passwort merken“, nach id. asked: ids, nach deren
+-- Passwort beim Öffnen schon gefragt wurde.
+local session = { started = false, reopen = false, last_book = nil, just_finished = false, secrets = {}, asked = {} }
+
+-- Diese Einstellungen gehören dem angemeldeten Benutzer, alle anderen gelten für alle.
+local USER_KEYS = { server = true, username = true, password = true, headers = true }
 
 local NAME = "grimmory-ui"
 
@@ -92,8 +98,8 @@ function Grimmory:init()
     self.dir = DataStorage:getFullDataDir() .. "/" .. NAME
     adoptOldNames(settings_file, self.dir)
     self.settings = LuaSettings:open(settings_file)
-    util.makePath(self.dir .. "/thumbs")
-    self.data = library.load(self.dir)
+    self:migrateUsers()
+    self:loadLibrary()
     self:onDispatcherRegisterActions()
     putFirstInTools(self.ui.document and "ui/elements/reader_menu_order" or "ui/elements/filemanager_menu_order")
     self.ui.menu:registerToMainMenu(self)
@@ -143,7 +149,13 @@ end
 -- Einstellungen ------------------------------------------------------------------------------
 
 function Grimmory:setting(key)
-    local value = self.settings:readSetting(key)
+    local value
+    if USER_KEYS[key] then
+        local u = self:user()
+        value = u and (key == "password" and self:secret(u).password or u[key])
+    else
+        value = self.settings:readSetting(key)
+    end
     if value == nil or value == "" then -- ein geleertes Feld gilt als nicht gesetzt
         if key == "download_dir" then return self:defaultDownloadDir() end
         return DEFAULTS[key]
@@ -154,11 +166,6 @@ end
 function Grimmory:saveSetting(key, value)
     self.settings:saveSetting(key, value)
     self.settings:flush()
-    if key == "server" or key == "username" or key == "password" or key == "headers" then
-        self.settings:delSetting("tokens")
-        self.settings:flush()
-        self._client = nil
-    end
 end
 
 function Grimmory:defaultDownloadDir()
@@ -170,32 +177,232 @@ function Grimmory:isConfigured()
     return self:setting("server") ~= "" and self:setting("username") ~= ""
 end
 
-function Grimmory:client()
-    if self._client then return self._client end
-    local client, err = api.new{
-        base = self:setting("server"),
-        username = self:setting("username"),
-        password = self:setting("password"),
-        headers = self:setting("headers"),
-        tokens = self.settings:readSetting("tokens") or {},
+--- Client für einen Benutzer. Neue Tokens landen dort, wo auch sein Passwort liegt.
+function Grimmory:clientFor(u)
+    local secret = self:secret(u)
+    return api.new{
+        base = u.server,
+        username = u.username,
+        password = secret.password or "",
+        headers = u.headers or {},
+        tokens = secret.tokens or {},
         on_tokens = function(tokens)
-            self.settings:saveSetting("tokens", tokens)
-            self.settings:flush()
+            secret.tokens = tokens
+            if secret == u then self:writeUsers() end
         end,
     }
+end
+
+--- Client des angemeldeten Benutzers.
+function Grimmory:client()
+    if self._client then return self._client end
+    local u = self:user()
+    if not u then return nil, _("Server-Adresse ungültig") end
+    local client, err = self:clientFor(u)
     self._client = client
     return client, err
 end
 
+-- Benutzer -----------------------------------------------------------------------------------
+
+--- Bis Version 1.2 gab es einen einzigen Zugang. Er wird der erste Benutzer, mit Bibliothek und Covern.
+function Grimmory:migrateUsers()
+    local s = self.settings
+    if s:readSetting("users") then return end
+    local old = {}
+    for _, key in ipairs{ "server", "username", "password", "headers", "tokens" } do
+        old[key] = s:readSetting(key)
+        s:delSetting(key)
+    end
+    local first = users.fromOld(old)
+    if first then
+        local dir = self:userDir(first)
+        util.makePath(dir)
+        os.rename(self.dir .. "/library.json", dir .. "/library.json")
+        os.rename(self.dir .. "/thumbs", dir .. "/thumbs")
+        s:saveSetting("active_user", first.id)
+    end
+    s:saveSetting("users", { first })
+    s:flush()
+    logger.info("Grimmory: Zugang als ersten Benutzer übernommen")
+end
+
+function Grimmory:users() return self.settings:readSetting("users") or {} end
+
+--- Der angemeldete Benutzer, nil ohne.
+function Grimmory:user()
+    return (users.find(self:users(), self.settings:readSetting("active_user")))
+end
+
+function Grimmory:isActive(u)
+    return u ~= nil and u.id == self.settings:readSetting("active_user")
+end
+
+function Grimmory:userDir(u) return self.dir .. "/users/" .. tostring(u.id) end
+
+function Grimmory:writeUsers()
+    self.settings:saveSetting("users", self:users())
+    self.settings:flush()
+end
+
+--- Wo Passwort und Tokens eines Benutzers liegen: mit „Passwort merken“ beim Benutzer in den
+--- Einstellungen, sonst nur im Speicher.
+function Grimmory:secret(u)
+    if u.remember ~= false then return u end
+    session.secrets[u.id] = session.secrets[u.id] or {}
+    return session.secrets[u.id]
+end
+
+function Grimmory:hasPassword(u)
+    return u ~= nil and (self:secret(u).password or "") ~= ""
+end
+
+--- Felder eines Benutzers ändern. Ein anderer Zugang verwirft die Anmeldung.
+function Grimmory:saveUser(u, changes)
+    local secret = self:secret(u)
+    for key, value in pairs(changes) do
+        if key == "password" then secret.password = value else u[key] = value end
+        if USER_KEYS[key] then secret.tokens = nil end
+    end
+    self:writeUsers()
+    if self:isActive(u) then self._client = nil end
+end
+
+--- „Passwort merken“ umschalten. Passwort und Anmeldung ziehen mit um.
+function Grimmory:setRemember(u, on)
+    local from = self:secret(u)
+    u.remember = on
+    local to = self:secret(u)
+    to.password, to.tokens = from.password, from.tokens
+    if on then session.secrets[u.id] = nil else u.password, u.tokens = nil, nil end
+    self:writeUsers()
+    if self:isActive(u) then self._client = nil end
+end
+
+--- Neuer Benutzer mit Adresse und Headern des angemeldeten als Vorlage.
+function Grimmory:addUser()
+    local list = self:users()
+    local u = users.new(list, self:user())
+    table.insert(list, u)
+    self:writeUsers()
+    return u
+end
+
+--- Benutzer samt seiner Bibliothek auf dem Gerät entfernen. Heruntergeladene Bücher bleiben.
+function Grimmory:removeUser(u)
+    local was_active = self:isActive(u)
+    local list = self:users()
+    local found, i = users.find(list, u.id)
+    if found then table.remove(list, i) end
+    session.secrets[u.id] = nil
+    ffiutil.purgeDir(self:userDir(u))
+    self:writeUsers()
+    if was_active then
+        self:activate(list[1])
+    elseif self.app then
+        self.app:render() -- mit nur noch einem Benutzer ohne Namen im Gruß
+    end
+end
+
+--- Ohne Rückfrage zu `u` wechseln (nil: niemand angemeldet). Ein laufender Abgleich bricht ab.
+function Grimmory:activate(u)
+    if self.sync_pid then
+        ffiutil.terminateSubProcess(self.sync_pid)
+        self.sync_pid = nil
+    end
+    if u then self.settings:saveSetting("active_user", u.id) else self.settings:delSetting("active_user") end
+    self.settings:flush()
+    self._client, self.sync_status = nil, nil
+    self:loadLibrary()
+    if self.app then
+        self:closeApp()
+        self:showApp()
+    end
+end
+
+--- Zu `u` wechseln, ohne gemerktes Passwort erst nach der Eingabe.
+function Grimmory:switchUser(u)
+    if self:isActive(u) then return end
+    if not self:hasPassword(u) then
+        self:askPassword(u, function() self:switchUser(u) end)
+        return
+    end
+    self:activate(u)
+end
+
+--- Passwort abfragen. Der Haken „Passwort merken“ steht wie beim Benutzer eingestellt.
+function Grimmory:askPassword(u, on_ok)
+    local CheckButton = require("ui/widget/checkbutton")
+    local InputDialog = require("ui/widget/inputdialog")
+    local dialog, remember
+    dialog = InputDialog:new{
+        title = T(_("Anmelden als %1"), users.label(u)),
+        description = (u.username or "") .. " · " .. users.host(u.server),
+        text_type = "password",
+        buttons = { {
+            { text = _("Abbrechen"), id = "close", callback = function() UIManager:close(dialog) end },
+            { text = _("Anmelden"), is_enter_default = true, callback = function()
+                local password = dialog:getInputText()
+                if password == "" then return end
+                UIManager:close(dialog)
+                if remember.checked ~= (u.remember ~= false) then self:setRemember(u, remember.checked) end
+                self:saveUser(u, { password = password })
+                on_ok()
+            end },
+        } },
+    }
+    remember = CheckButton:new{ text = _("Passwort merken"), checked = u.remember ~= false, parent = dialog }
+    dialog:addWidget(remember)
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
+function Grimmory:showUsers()
+    self:closeMenu()
+    UIManager:show(require("grimmoryui/userlist"):new{ plugin = self })
+end
+
+--- Seite eines Benutzers. `parent`: die Einstellungen darunter, `created`: gerade angelegt, ohne
+--- Benutzername verschwindet er beim Schließen wieder.
+function Grimmory:showUserEditor(u, parent, created)
+    self:closeMenu()
+    UIManager:show(require("grimmoryui/settings"):new{ plugin = self, user = u, parent = parent, created = created })
+end
+
 -- Bibliothek ---------------------------------------------------------------------------------
 
+--- Bibliothek des angemeldeten Benutzers laden. Heruntergeladene Bücher gehören zum Server: Was ein
+--- anderer Benutzer desselben Servers geladen hat, liegt auch für diesen bereit.
+function Grimmory:loadLibrary()
+    local u = self:user()
+    self.lib_dir = u and self:userDir(u)
+    if not u then
+        self.data = library.empty()
+        return
+    end
+    util.makePath(self.lib_dir .. "/thumbs")
+    self.data = library.load(self.lib_dir)
+    local server, added = api.normalizeBase(u.server), false
+    for _, other in ipairs(self:users()) do
+        if other.id ~= u.id and server and api.normalizeBase(other.server) == server then
+            for id, path in pairs(library.load(self:userDir(other)).files) do
+                if not self:localFile{ id = id } and lfs.attributes(path, "mode") == "file" then
+                    self.data.files[id], added = path, true
+                end
+            end
+        end
+    end
+    if added then self:save() end
+end
+
 function Grimmory:save()
-    local ok, err = library.save(self.dir, self.data)
+    if not self.lib_dir then return end
+    local ok, err = library.save(self.lib_dir, self.data)
     if not ok then logger.warn("Grimmory: library.json nicht gespeichert:", err) end
 end
 
 function Grimmory:thumbPath(book)
-    return self.dir .. "/thumbs/" .. tostring(book.id) .. ".jpg"
+    return self.lib_dir .. "/thumbs/" .. tostring(book.id) .. ".jpg"
 end
 
 function Grimmory:localFile(book)
@@ -288,25 +495,30 @@ function Grimmory:sync(silent, on_done)
         return
     end
     if self.sync_pid then return end
+    if not self:hasPassword(self:user()) then
+        if not silent then self:askPassword(self:user(), function() self:sync(silent, on_done) end) end
+        return
+    end
     local function start()
-        local out = self.dir .. "/sync"
+        local out = self.lib_dir .. "/sync"
         util.makePath(out)
         local client = self:client()
         local formats, covers = self:setting("formats"), self:setting("prefetch_covers")
         local pid, fd = ffiutil.runInSubProcess(function(_, write_fd)
-            local tokens
+            local tokens, name
             client.on_tokens = function(t) tokens = t end
             local source = covers and client or {
                 books = function() return client:books() end,
                 series = function() return client:series() end,
                 thumbnail = function() return false end,
             }
-            local result, err = library.sync(source, self.dir, self.data, formats)
+            local result, err = library.sync(source, self.lib_dir, self.data, formats)
             if result then
                 pcall(self.pushReadStates, self)
+                name = (client:me() or {}).name -- für den Gruß und die Liste der Benutzer
                 if not library.save(out, self.data) then result, err = nil, "sync/library.json" end
             end
-            ffiutil.writeToFD(write_fd, JSON.encode{ result = result, tokens = tokens,
+            ffiutil.writeToFD(write_fd, JSON.encode{ result = result, tokens = tokens, name = name,
                 error = not result and api.describe(err) or nil }, true)
         end, true)
         if not pid then
@@ -323,6 +535,7 @@ function Grimmory:sync(silent, on_done)
                 ffiutil.terminateSubProcess(pid) -- ponytail: fest 15 Minuten, die Timeouts der Requests greifen früher
             end
             local ok, msg = pcall(JSON.decode, ffiutil.readAllFromFD(fd))
+            if self.sync_pid ~= pid then return end -- Benutzer gewechselt, das Ergebnis gehört dem vorigen
             self.sync_pid = nil
             self:finishSync(ok and type(msg) == "table" and msg or {}, silent, on_done)
         end
@@ -334,15 +547,19 @@ end
 --- Ergebnis des Abgleichs übernehmen. Übernommen wird nur, was ein Abgleich erneuert, auf die
 --- library.json von der Platte: Downloads und Angesehenes von währenddessen bleiben so erhalten.
 function Grimmory:finishSync(msg, silent, on_done)
-    if type(msg.tokens) == "table" then
-        self.settings:saveSetting("tokens", msg.tokens)
-        self.settings:flush()
-        if self._client then self._client.tokens = msg.tokens end
+    local u = self:user()
+    if u and (type(msg.tokens) == "table" or type(msg.name) == "string") then
+        if type(msg.tokens) == "table" then
+            self:secret(u).tokens = msg.tokens
+            if self._client then self._client.tokens = msg.tokens end
+        end
+        if type(msg.name) == "string" and msg.name ~= "" then u.name = msg.name end
+        self:writeUsers()
     end
-    local fresh = msg.result and library.load(self.dir .. "/sync")
-    os.remove(self.dir .. "/sync/library.json")
+    local fresh = msg.result and library.load(self.lib_dir .. "/sync")
+    os.remove(self.lib_dir .. "/sync/library.json")
     if fresh and fresh.synced_at then
-        local data = library.load(self.dir)
+        local data = library.load(self.lib_dir)
         local known, new = {}, 0
         for _, b in ipairs(data.books) do known[b.id] = true end
         for _, b in ipairs(fresh.books) do if not known[b.id] then new = new + 1 end end
@@ -386,7 +603,7 @@ end
 --- danach, ohne Abgleich sofort.
 function Grimmory:maybeAutoSync(on_done)
     local age = os.time() - (self.data.synced_at or 0)
-    if self:setting("auto_sync") and self:isConfigured() and NetworkMgr:isConnected()
+    if self:setting("auto_sync") and self:isConfigured() and self:hasPassword(self:user()) and NetworkMgr:isConnected()
         and age >= self:setting("sync_minutes") * 60 then
         self:sync(true, on_done)
     elseif on_done then
@@ -602,8 +819,15 @@ function Grimmory:showApp()
     UIManager:show(self.app)
     local just_finished = session.just_finished
     session.just_finished = false
-    -- Die Bitte um einen Stern erst nach dem Abgleich, nie währenddessen.
+    -- Die Bitte um einen Stern erst nach dem Abgleich, nie währenddessen. Ist das Passwort nicht
+    -- gemerkt, fragt das Plugin einmal je Start von KOReader danach.
     UIManager:nextTick(function()
+        local u = self:user()
+        if self:isConfigured() and not self:hasPassword(u) and not session.asked[u.id] then
+            session.asked[u.id] = true
+            self:askPassword(u, function() self:maybeAutoSync() end)
+            return
+        end
         self:maybeAutoSync(function() self:offerRating(just_finished) end)
     end)
 end
