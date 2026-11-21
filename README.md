@@ -144,6 +144,11 @@ then the number of new books. If the sync fails, a warning appears in the header
 reason. The plugin never switches Wi-Fi on for an automatic sync. While the e-reader sleeps,
 nothing runs: there is no background service outside KOReader.
 
+For troubleshooting, the plugin keeps its own log in `koreader/grimmory-ui/grimmory-ui.log`: every
+request with its status and duration, the start and result of each sync, and errors. Once the file
+grows beyond 4 MB it becomes `grimmory-ui.log.1` and a new one starts, so the log never takes more
+than 8 MB. Query strings, headers, tokens and passwords never go into the log.
+
 ## Security
 
 - Every HTTPS connection verifies the certificate chain against KOReader's CA bundle and checks

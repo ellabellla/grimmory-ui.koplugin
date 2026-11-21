@@ -14,6 +14,7 @@ local http = require("socket.http")
 local ltn12 = require("ltn12")
 local socket = require("socket")
 local socketutil = require("socketutil")
+local log = require("grimmoryui/log")
 local _ = require("grimmoryui/i18n")
 
 -- Relativ zum Arbeitsverzeichnis von KOReader.
@@ -140,7 +141,16 @@ end
 --- Ein HTTP-Aufruf mit Zertifikatsprüfung bei https. opts: json (Tabelle als Body),
 --- file (Body in diese Datei), redirect (Vorgabe false).
 --- Gibt Status-Code, Body und Header zurück, bei Netzwerkfehlern nil und die Meldung.
+--- Jeder Aufruf landet im Log, ohne Query: Sie könnte einen Schlüssel enthalten.
 function M.fetch(method, full_url, headers, opts)
+    local started = socket.gettime()
+    local code, body, resp_headers = M.request(method, full_url, headers, opts)
+    log.write(method, (full_url:gsub("%?.*$", "")), code or ("Fehler: " .. tostring(body)),
+        string.format("%.1f s", socket.gettime() - started))
+    return code, body, resp_headers
+end
+
+function M.request(method, full_url, headers, opts)
     opts = opts or {}
     local chunks = {}
     local req = { url = full_url, method = method, headers = headers, redirect = opts.redirect or false }

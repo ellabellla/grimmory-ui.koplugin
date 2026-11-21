@@ -213,4 +213,16 @@ assert(users.label{ name = "Anna", username = "anna" } == "Anna" and users.label
 assert(users.label{} == "Neuer Benutzer")
 assert(users.initial{ username = "ölf" } == "ö" and users.initial{ name = "anna" } == "A")
 
+-- Log: über der Grenze wird die Datei zu .1, die vorige .1 fällt weg
+local log = require("grimmoryui/log")
+local logfile = os.tmpname()
+local function size(p) local h = io.open(p, "rb"); if not h then return nil end local n = h:seek("end"); h:close(); return n end
+os.remove(logfile .. ".1")
+log.open(logfile); log.max = 100
+for i = 1, 5 do log.write("Zeile", i, string.rep("x", 30)) end
+assert(size(logfile) <= 100 and size(logfile .. ".1") <= 100)
+assert(io.open(logfile):read("*a"):find("Zeile 5 x") and io.open(logfile .. ".1"):read("*a"):find("Zeile 4 x"))
+os.remove(logfile); os.remove(logfile .. ".1"); log.open(nil)
+log.write("ohne Datei kein Fehler")
+
 print("ok")

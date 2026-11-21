@@ -27,6 +27,7 @@ local util = require("util")
 
 local api = require("grimmoryui/api")
 local library = require("grimmoryui/library")
+local log = require("grimmoryui/log")
 local rating = require("grimmoryui/rating")
 local users = require("grimmoryui/users")
 local _ = require("grimmoryui/i18n")
@@ -97,6 +98,12 @@ function Grimmory:init()
     local settings_file = DataStorage:getSettingsDir() .. "/" .. NAME .. ".lua"
     self.dir = DataStorage:getFullDataDir() .. "/" .. NAME
     adoptOldNames(settings_file, self.dir)
+    util.makePath(self.dir)
+    log.open(self.dir .. "/" .. NAME .. ".log")
+    if not session.logged then
+        session.logged = true
+        log.write("Start: Plugin", self.version or "?", "auf", Device.model or "?")
+    end
     self.settings = LuaSettings:open(settings_file)
     self:migrateUsers()
     self:loadLibrary()
@@ -512,7 +519,14 @@ function Grimmory:sync(silent, on_done)
                 series = function() return client:series() end,
                 thumbnail = function() return false end,
             }
-            local result, err = library.sync(source, self.lib_dir, self.data, formats)
+            local ok, result, err = xpcall(library.sync, debug.traceback, source, self.lib_dir, self.data, formats)
+            if not ok then
+                log.write("Abgleich: Lua-Fehler", result)
+                result, err = nil, tostring(result):match("^[^\n]*")
+            elseif result then
+                log.write("Abgleich:", result.books, "Bücher,", result.series, "Reihen,", result.thumbs,
+                    "Cover geladen,", result.failed, "fehlgeschlagen")
+            end
             if result then
                 pcall(self.pushReadStates, self)
                 name = (client:me() or {}).name -- für den Gruß und die Liste der Benutzer
@@ -526,6 +540,7 @@ function Grimmory:sync(silent, on_done)
             return
         end
         self.sync_pid, self.sync_status = pid, { running = true }
+        log.write("Abgleich gestartet, Benutzer", self:user().id)
         self:redraw()
         local waited = 0
         local function poll()
@@ -535,6 +550,10 @@ function Grimmory:sync(silent, on_done)
                 ffiutil.terminateSubProcess(pid) -- ponytail: fest 15 Minuten, die Timeouts der Requests greifen früher
             end
             local ok, msg = pcall(JSON.decode, ffiutil.readAllFromFD(fd))
+            if not (ok and type(msg) == "table") then
+                log.write("Abgleich: Prozess ohne Ergebnis beendet", waited >= 900 and "(nach 15 Minuten abgebrochen)"
+                    or "(abgestürzt oder vom System beendet)")
+            end
             if self.sync_pid ~= pid then return end -- Benutzer gewechselt, das Ergebnis gehört dem vorigen
             self.sync_pid = nil
             self:finishSync(ok and type(msg) == "table" and msg or {}, silent, on_done)
@@ -577,6 +596,7 @@ function Grimmory:finishSync(msg, silent, on_done)
         if self.app and was_empty then self.app:reroll() end
     else
         self.sync_status = { error = msg.error or api.describe(nil) }
+        log.write("Abgleich fehlgeschlagen:", self.sync_status.error)
         if not silent then
             UIManager:show(InfoMessage:new{ text = T(_("Abgleich fehlgeschlagen: %1"), self.sync_status.error) })
         end
