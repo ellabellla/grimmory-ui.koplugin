@@ -707,20 +707,35 @@ end
 
 -- Regal --------------------------------------------------------------------------------------
 
+--- Das Regal aus Grimmory, das der Bereich Regal zeigt (Einstellungen › Anzeige), nil für die
+--- ganze Bibliothek. Die Wahl gilt je Benutzer. Gibt es das Regal nach einem Abgleich nicht mehr,
+--- zeigt der Bereich wieder alles.
+function App:regalShelf()
+    local u = self.plugin:user()
+    return lib.findShelf(self:data().shelves, u and u.regal_shelf)
+end
+
+--- Die Bücher im Regal: das gewählte Regal oder die ganze Bibliothek.
+function App:regalBooks()
+    return lib.shelfBooks(self:data().books, self:regalShelf())
+end
+
 --- Das gewählte Genre, solange es im Regal noch Bücher hat. Sonst gilt „Alle Genres“, die Wahl
 --- bleibt aber gespeichert und greift wieder, sobald das Genre zurück ist.
 function App:regalGenre()
     local genre = self.regal_genre
-    if genre and #lib.byGenre(self:data().books, genre) == 0 then return nil end
+    if genre and #lib.byGenre(self:regalBooks(), genre) == 0 then return nil end
     return genre
 end
 
 function App:screenRegal(h)
     local data = self:data()
-    local head = { title = _("Regal"), subtitle = self:subtitle(count(#data.books, "%1 Buch", "%1 Bücher")),
+    local shelf, shelf_books = self:regalShelf(), self:regalBooks()
+    local head = { title = shelf and shelf.name or _("Regal"),
+        subtitle = self:subtitle(count(#shelf_books, "%1 Buch", "%1 Bücher")),
         on_menu = function() self.plugin:showMenu() end }
     local genre_name = self:regalGenre()
-    local books = lib.sortBooks(lib.byGenre(data.books, genre_name), self.regal_sort, self.shuffle_seed, data.viewed)
+    local books = lib.sortBooks(lib.byGenre(shelf_books, genre_name), self.regal_sort, self.shuffle_seed, data.viewed)
     local sort_content = HorizontalGroup:new{ align = "center",
         UI.text(sortLabel(REGAL_SORTS, self.regal_sort, "short"), 24, { bold = true, max_width = UI.px(170) }),
         UI.hspan(10), UI.icon("control.expand", 28) }
@@ -754,7 +769,7 @@ end
 
 --- Genre wählen auf einer eigenen Seite, die blättert und sucht. Die Wahl bleibt gespeichert.
 function App:pickGenre()
-    local books = self:data().books
+    local books = self:regalBooks()
     local current = self:regalGenre()
     local items = { { label = _("Alle Genres"), right = tostring(#books), value = false, selected = not current,
         keep = true } }

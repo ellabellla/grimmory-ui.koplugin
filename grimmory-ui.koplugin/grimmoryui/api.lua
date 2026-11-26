@@ -264,6 +264,13 @@ function Client:me() return self:getJSON("/api/v1/users/me") end
 function Client:books() return self:getAllPages("/api/v1/app/books?sort=addedOn&dir=desc") end
 function Client:series() return self:getAllPages("/api/v1/app/series") end
 function Client:bookDetail(id) return self:getJSON("/api/v1/app/books/" .. id) end
+function Client:shelves() return self:getJSON("/api/v1/app/shelves") end
+function Client:magicShelves() return self:getJSON("/api/v1/app/shelves/magic") end
+
+--- Ids aller Bücher eines Regals, `magic` für ein magisches Regal.
+function Client:shelfBookIds(id, magic)
+    return self:getJSON("/api/v1/app/books/ids?" .. (magic and "magicShelfId=" or "shelfId=") .. id)
+end
 
 --- Lädt das kleine Cover (250 × 350) in `file`.
 function Client:thumbnail(id, file)

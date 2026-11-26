@@ -2,7 +2,7 @@
 Lokales Abbild der Grimmory-Bibliothek: Abgleich mit dem Server und Abfragen für die Oberfläche.
 
 Auf dem Gerät liegt alles unter <Datenordner>/grimmory-ui/:
-- library.json: Bücher und Reihen vom letzten Abgleich, dazu welches Buch wo heruntergeladen liegt.
+- library.json: Bücher, Reihen und Regale vom letzten Abgleich, dazu welches Buch wo heruntergeladen liegt.
 - thumbs/<id>.jpg: kleine Cover. Neu geladen wird nur, wenn sich `coverUpdatedOn` ändert.
 
 Die Abfragefunktionen arbeiten nur auf Tabellen und lassen sich ohne KOReader testen.
@@ -27,11 +27,12 @@ end
 --- viewed merkt sich nur auf dem Gerät, wann ein Buch oder eine Reihe zuletzt angesehen wurde:
 --- { books = { ["<id>"] = Zeit }, series = { ["<Name>"] = Zeit } }.
 function M.empty()
-    return { books = {}, series = {}, thumbs = {}, files = {}, details = {}, viewed = {}, synced_at = nil }
+    return { books = {}, series = {}, shelves = {}, thumbs = {}, files = {}, details = {}, viewed = {},
+        synced_at = nil }
 end
 
 --- Was ein Abgleich erneuert. Alles andere in library.json gehört dem Gerät.
-M.SYNCED = { "books", "series", "thumbs", "formats", "synced_at" }
+M.SYNCED = { "books", "series", "shelves", "thumbs", "formats", "synced_at" }
 
 function M.load(dir)
     local fh = io.open(dir .. "/library.json", "r")
@@ -92,6 +93,24 @@ function M.applyFormats(books, series, formats)
     return kept, kept_series, counts
 end
 
+--- Regale und magische Regale mit den Ids ihrer Bücher: { { key = "s12", name =, magic =, books = { 3, 7 } } }.
+--- Regale sind eine Zugabe: Fehlt die Schnittstelle (ältere Server) oder klappt ein Abruf nicht,
+--- fehlt nur das Regal, der Abgleich scheitert daran nicht.
+function M.fetchShelves(client)
+    local list = {}
+    for _, kind in ipairs({ { fetch = client.shelves, magic = false }, { fetch = client.magicShelves, magic = true } }) do
+        for _, s in ipairs(kind.fetch(client) or {}) do
+            local ids = s.id and client:shelfBookIds(s.id, kind.magic)
+            if ids then
+                table.insert(list, { key = (kind.magic and "m" or "s") .. s.id, name = s.name or "",
+                    magic = kind.magic, books = ids })
+            end
+        end
+    end
+    table.sort(list, function(a, b) return lower(a.name) < lower(b.name) end)
+    return list
+end
+
 --- Gleicht `dir` mit dem Server ab, nur Bücher in den Formaten `formats`.
 --- Ergebnis: Tabelle mit books, series, thumbs, failed oder nil und Fehler.
 function M.sync(client, dir, data, formats)
@@ -133,6 +152,7 @@ function M.sync(client, dir, data, formats)
         end
     end
 
+    data.shelves = M.fetchShelves(client)
     data.books, data.series, data.synced_at = books, series, os.time()
     return { books = #books, series = #series, thumbs = fetched, failed = failed }
 end
@@ -196,6 +216,27 @@ function M.byGenre(books, genre)
         for _, c in ipairs(b.categories or {}) do
             if c == genre then table.insert(list, b); break end
         end
+    end
+    return list
+end
+
+--- Das Regal mit `key` aus `shelves`, nil ohne.
+function M.findShelf(shelves, key)
+    if not key then return nil end
+    for _, s in ipairs(shelves or {}) do
+        if s.key == key then return s end
+    end
+    return nil
+end
+
+--- Die Bücher aus `books`, die im Regal `shelf` stehen, in der Reihenfolge von `books`.
+function M.shelfBooks(books, shelf)
+    if not shelf then return books end
+    local ids = {}
+    for _, id in ipairs(shelf.books or {}) do ids[tostring(id)] = true end
+    local list = {}
+    for _, b in ipairs(books) do
+        if ids[tostring(b.id)] then table.insert(list, b) end
     end
     return list
 end

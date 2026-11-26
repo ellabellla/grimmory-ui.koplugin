@@ -225,4 +225,24 @@ assert(io.open(logfile):read("*a"):find("Zeile 5 x") and io.open(logfile .. ".1"
 os.remove(logfile); os.remove(logfile .. ".1"); log.open(nil)
 log.write("ohne Datei kein Fehler")
 
+-- Regale: Abruf mit magischen Regalen, ein fehlgeschlagener Abruf lässt nur das Regal weg
+local fake = {
+    shelves = function() return { { id = 1, name = "zuletzt" }, { id = 2, name = "Kaputt" } } end,
+    magicShelves = function() return { { id = 1, name = "Angefangen" } } end,
+    shelfBookIds = function(_, id, magic)
+        if magic then return { 20 } end
+        if id == 2 then return nil, 500 end
+        return { 10, 30 }
+    end,
+}
+local shelves = lib.fetchShelves(fake)
+assert(#shelves == 2 and shelves[1].key == "m1" and shelves[1].magic and shelves[2].key == "s1")
+assert(#lib.fetchShelves{ shelves = function() return nil, 404 end, magicShelves = function() return nil, 404 end } == 0)
+assert(lib.findShelf(shelves, "s1") == shelves[2] and lib.findShelf(shelves, "s9") == nil)
+assert(lib.findShelf(shelves, nil) == nil and lib.findShelf(shelves, false) == nil)
+local shelf_lib = { { id = 30 }, { id = 20 }, { id = 10 } }
+local on_shelf = lib.shelfBooks(shelf_lib, shelves[2])
+assert(#on_shelf == 2 and on_shelf[1].id == 30 and on_shelf[2].id == 10)
+assert(lib.shelfBooks(shelf_lib, nil) == shelf_lib)
+
 print("ok")

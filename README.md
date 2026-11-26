@@ -28,7 +28,7 @@ from a 2009 Kindle 2 to a Kobo Libra Colour.
 | **Home** | A greeting for the time of day, your server and when it last synced. Continue reading, four random books, the four most recently added. |
 | **Series** | Every series with its reading state per volume (read, in progress, unread, missing from Grimmory); long series become a progress bar. Sorted by last read, last viewed or name; the choice is remembered. |
 | **Browse** | A random series, a random book with its blurb, and three random genres as tabs. Shuffle for new picks. |
-| **Shelf** | The whole library as a cover grid. Filter by genre and sort by date added, title, author, series, last read, last viewed or at random (the default); both choices are remembered. |
+| **Shelf** | The whole library or one of your Grimmory shelves (Settings › Display) as a cover grid. Filter by genre and sort by date added, title, author, series, last read, last viewed or at random (the default); both choices are remembered. |
 | **Search** | Title, author and series search with filters for in progress, unread, read and on this device. Sorted like the Shelf or by size, at random by default; the choice is remembered. |
 
 From the menu you can sync, see what is stored on the device and free up space book by book,
@@ -96,8 +96,9 @@ Open the menu at the top left, then **Settings**:
 - **Formats:** only books in the formats switched on here are synced, EPUB and MOBI by default.
   Every format on your server is listed with its number of books.
 - **Books:** download folder, remove finished books after a number of days.
-- **Display:** the section the plugin opens with, and whether it opens instead of the file
-  manager.
+- **Display:** the section the plugin opens with, whether it opens instead of the file
+  manager, and what the Shelf shows: the whole library or one shelf or magic shelf from Grimmory.
+  Shelves come with every sync; the choice is kept per user.
 
 In Grimmory, the user needs the permissions **Download Books** and **KOReader Sync**. A separate
 account for the e-reader works best.

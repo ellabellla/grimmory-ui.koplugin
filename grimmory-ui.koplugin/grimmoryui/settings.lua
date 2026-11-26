@@ -21,6 +21,7 @@ local NetworkMgr = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local api = require("grimmoryui/api")
+local lib = require("grimmoryui/library")
 local users = require("grimmoryui/users")
 local UserList = require("grimmoryui/userlist")
 local UI = require("grimmoryui/ui")
@@ -200,6 +201,29 @@ function Settings:chooseStartTab()
     UIManager:show(dialog)
 end
 
+--- Welches Regal aus Grimmory der Bereich Regal zeigt, gespeichert beim angemeldeten Benutzer.
+--- Die Zahl rechts zählt die Bücher, die davon auf dem Gerät bekannt sind.
+function Settings:chooseShelf()
+    local p, u = self.plugin, self.plugin:user()
+    local books = p.data.books
+    local current = lib.findShelf(p.data.shelves, u.regal_shelf)
+    local items = { { label = _("Ganze Bibliothek"), right = tostring(#books), value = false, selected = not current,
+        keep = true } }
+    for _, shelf in ipairs(p.data.shelves or {}) do
+        table.insert(items, { label = shelf.name, right = tostring(#lib.shelfBooks(books, shelf)), value = shelf.key,
+            selected = current == shelf })
+    end
+    local Picker = require("grimmoryui/picker")
+    UIManager:show(Picker:new{
+        back = _("Einstellungen"), items = items, searchable = #items > 8, search_hint = _("Regal suchen"),
+        on_pick = function(v)
+            p:saveUser(u, { regal_shelf = v })
+            if p.app then p.app.page.regal = 1 end
+            self:refresh()
+        end,
+    })
+end
+
 function Settings:rows()
     local p = self.plugin
     local w = innerWidth() - UI.px(360)
@@ -275,6 +299,11 @@ function Settings:rows()
     local start = UI.TABS[1].label
     for _, tab in ipairs(UI.TABS) do if tab.id == p:setting("start_tab") then start = tab.label end end
     value(_("Startbereich"), start, function() self:chooseStartTab() end)
+    if p:user() then
+        local shelf = lib.findShelf(p.data.shelves, p:user().regal_shelf)
+        value(_("Regal zeigt"), shelf and shelf.name or _("Ganze Bibliothek"), function() self:chooseShelf() end,
+            _("ein Regal aus Grimmory, je Benutzer"))
+    end
     toggle(_("Statt des Dateimanagers öffnen"), _("beim Start von KOReader und nach jedem Buch"), "autostart")
 
     section(_("UPDATES"))
