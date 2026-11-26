@@ -517,6 +517,9 @@ function Grimmory:sync(silent, on_done)
             local source = covers and client or {
                 books = function() return client:books() end,
                 series = function() return client:series() end,
+                shelves = function() return client:shelves() end,
+                magicShelves = function() return client:magicShelves() end,
+                shelfBookIds = function(_, id, magic) return client:shelfBookIds(id, magic) end,
                 thumbnail = function() return false end,
             }
             local ok, result, err = xpcall(library.sync, debug.traceback, source, self.lib_dir, self.data, formats)
